@@ -1,4 +1,4 @@
-function wrapperCreateOutputFiles(experiment, subj, sessionIdxs, featureNames, interactionMasks, mrifOptions)
+function wrapperCreateOutputFiles(experiment, subj, sessionIdxs, featureNames, interactionMasks, writeTopVoxels, mrifOptions)
 
 TOP_VOXEL_COUNT = 20;
 
@@ -117,9 +117,9 @@ for session = sessionIdxs
         eventBetas(eventBetasStart:eventBetasEnd,:) = curEventBetas;
     end    
     
-    % write out the event betas
-    eventBetasFilename = fullfile(niftisDir, 'eventBetas.mat');
-    save(eventBetasFilename, 'eventBetas');
+    % write out the betas
+    betasFilename = fullfile(niftisDir, 'betas.mat');
+    save(betasFilename, 'betas');
     
     % get the correlation of the corss-validation sets
     ccEst = concatSubFields('model','cc',1,estDir);
@@ -256,41 +256,6 @@ for session = sessionIdxs
         end
     else
     
-        % get the expainable variance
-        expVarCC = concatSubFields('model', 'cc', 1, snrDir);
-        expVarR2 = concatSubFields('model', 'r2', 1, snrDir);
-        expVarMSE = concatSubFields('model', 'mse', 1, snrDir);
-        
-        % get the indices of the lambdas used for each voxel and then get the
-        % correlations used for each voxel
-        snrLambdasUsed = concatSubFields('model','lambdasUsed', 1, snrDir);
-        expVarUsedCC = expVarCC(sub2ind(size(expVarCC),[1:length(snrLambdasUsed)]',snrLambdasUsed));
-        expVarUsedR2 = expVarR2(sub2ind(size(expVarR2),[1:length(snrLambdasUsed)]',snrLambdasUsed));
-        expVarUsedMSE = expVarMSE(sub2ind(size(expVarMSE),[1:length(snrLambdasUsed)]',snrLambdasUsed));
-        
-        % allocate a matrix to store the betas for the entire volume
-        expVarVolCC = zeros(1,volumeVoxCount);
-        expVarVolCC(voxIdxs) = expVarUsedCC;
-        expVarVolR2 = zeros(1,volumeVoxCount);
-        expVarVolR2(voxIdxs) = expVarUsedR2;
-        expVarVolR = sqrt(expVarVolR2);
-        expVarVolMSE = zeros(1,volumeVoxCount);
-        expVarVolMSE(voxIdxs) = expVarUsedMSE;
-        
-        % write out the estimation correlation coefficients
-        expVarFilenameCC = 'explainableVariance_CC.nii';
-        expVarFilenameCC = fullfile(niftisDir, expVarFilenameCC);
-        writeVol(expVarFilenameCC, header, expVarVolCC);
-        expVarFilenameR2 = 'explainableVariance_R2.nii';
-        expVarFilenameR2 = fullfile(niftisDir, expVarFilenameR2);
-        writeVol(expVarFilenameR2, header, expVarVolR2);
-        expVarFilenameR = 'explainableVariance_R.nii';
-        expVarFilenameR = fullfile(niftisDir, expVarFilenameR);
-        writeVol(expVarFilenameR, header, expVarVolR);
-        expVarFilenameMSE = 'explainableVariance_MSE.nii';
-        expVarFilenameMSE = fullfile(niftisDir, expVarFilenameMSE);
-        writeVol(expVarFilenameMSE, header, expVarVolMSE);
-        
         % get the variance accounted for in the validation set
         ccVal = concatSubFields('model', 'cc', 2, valDir);
         
@@ -315,27 +280,66 @@ for session = sessionIdxs
         ccValFlatMatFilename = fullfile(niftisDir, 'correlationHistogram-Val.mat');
         save(ccValFlatMatFilename, 'ccValFlat');
 
-        % get the r-value at which the noise ceiling map is considered to
-        % be significant, not noise
-        sigCCaArr = concatSubFields('model', 'sigCC', 1, snrDir);
-        sigCC = sigCCaArr(1);
-                
-        % make a thresholded explainable variance map, that exclude (sets
-        % to nan) everything that is less significant than a given value.
-        % This is because for voxels that are essentially noise, you can
-        % have very large looking normed prediction accuracy that is the
-        % result of just a very small explainable variance.
-        noiseCeilingMap = expVarVolCC;
-        noiseCeilingMap(noiseCeilingMap<sigCC) = nan;
+        % if explainable variance maps were made, save those out along with
+        % the normed correlation val
+        if find(ismember(mrifOptions.modes, 'snr'))
+            % get the expainable variance
+            expVarCC = concatSubFields('model', 'cc', 1, snrDir);
+            expVarR2 = concatSubFields('model', 'r2', 1, snrDir);
+            expVarMSE = concatSubFields('model', 'mse', 1, snrDir);
+            
+            % get the indices of the lambdas used for each voxel and then get the
+            % correlations used for each voxel
+            snrLambdasUsed = concatSubFields('model','lambdasUsed', 1, snrDir);
+            expVarUsedCC = expVarCC(sub2ind(size(expVarCC),[1:length(snrLambdasUsed)]',snrLambdasUsed));
+            expVarUsedR2 = expVarR2(sub2ind(size(expVarR2),[1:length(snrLambdasUsed)]',snrLambdasUsed));
+            expVarUsedMSE = expVarMSE(sub2ind(size(expVarMSE),[1:length(snrLambdasUsed)]',snrLambdasUsed));
+            
+            % allocate a matrix to store the betas for the entire volume
+            expVarVolCC = zeros(1,volumeVoxCount);
+            expVarVolCC(voxIdxs) = expVarUsedCC;
+            expVarVolR2 = zeros(1,volumeVoxCount);
+            expVarVolR2(voxIdxs) = expVarUsedR2;
+            expVarVolR = sqrt(expVarVolR2);
+            expVarVolMSE = zeros(1,volumeVoxCount);
+            expVarVolMSE(voxIdxs) = expVarUsedMSE;
+            
+            % write out the estimation correlation coefficients
+            expVarFilenameCC = 'explainableVariance_CC.nii';
+            expVarFilenameCC = fullfile(niftisDir, expVarFilenameCC);
+            writeVol(expVarFilenameCC, header, expVarVolCC);
+            expVarFilenameR2 = 'explainableVariance_R2.nii';
+            expVarFilenameR2 = fullfile(niftisDir, expVarFilenameR2);
+            writeVol(expVarFilenameR2, header, expVarVolR2);
+            expVarFilenameR = 'explainableVariance_R.nii';
+            expVarFilenameR = fullfile(niftisDir, expVarFilenameR);
+            writeVol(expVarFilenameR, header, expVarVolR);
+            expVarFilenameMSE = 'explainableVariance_MSE.nii';
+            expVarFilenameMSE = fullfile(niftisDir, expVarFilenameMSE);
+            writeVol(expVarFilenameMSE, header, expVarVolMSE);
         
-        % now scale the correlation coefficients by the variance map. Variance
-        % here is explainable variance, so this is a way to normalize the
-        % correlation coefficients to show how well they did compared to what
-        % the data allows (i.e. how good our signal is)
-        ccValNorm = ccValVol ./ noiseCeilingMap;
-        ccValNormFilename = 'correlationNormed-Val.nii';
-        ccValNormFilename = fullfile(niftisDir, ccValNormFilename);
-        writeVol(ccValNormFilename, header, ccValNorm);
+            % get the r-value at which the noise ceiling map is considered to
+            % be significant, not noise
+            sigCCaArr = concatSubFields('model', 'sigCC', 1, snrDir);
+            sigCC = sigCCaArr(1);
+            
+            % make a thresholded explainable variance map, that exclude (sets
+            % to nan) everything that is less significant than a given value.
+            % This is because for voxels that are essentially noise, you can
+            % have very large looking normed prediction accuracy that is the
+            % result of just a very small explainable variance.
+            noiseCeilingMap = expVarVolCC;
+            noiseCeilingMap(noiseCeilingMap<sigCC) = nan;
+            
+            % now scale the correlation coefficients by the variance map. Variance
+            % here is explainable variance, so this is a way to normalize the
+            % correlation coefficients to show how well they did compared to what
+            % the data allows (i.e. how good our signal is)
+            ccValNorm = ccValVol ./ noiseCeilingMap;
+            ccValNormFilename = 'correlationNormed-Val.nii';
+            ccValNormFilename = fullfile(niftisDir, ccValNormFilename);
+            writeVol(ccValNormFilename, header, ccValNorm);
+        end
     end
 
     % Sam ToDo - open one of the validation mat files to get the number of
@@ -368,40 +372,10 @@ for session = sessionIdxs
 %     snrMapFilename = fullfile(niftisDir, 'snrMap_Val.nii');
 %     writeVol(snrMapFilename, header, snrMapVol);
 %     
-    
-    writeTopVoxels = false;
+
+    % write out the top voxel histogram of betas if the flag says to
     if writeTopVoxels
-        % find the top N voxels in terms of correlation coefficient
-        [ccValSorted, ccValSortedIdxs] = sort(ccVal(:), 'descend');
-        NaNCount = sum(isnan(ccValSorted));
-        ccValClean = ccValSorted(NaNCount+1:end);
-        ccValCleanIdxs = ccValSortedIdxs(NaNCount+1:end);
-        topCCVal = ccValClean(1:TOP_VOXEL_COUNT);
-        topCCValIdxs = ccValCleanIdxs(1:TOP_VOXEL_COUNT);
-        [topX,topY,topZ] = ind2sub(header.dim, topCCValIdxs);
-        
-        % make a list of the event names from the interactionMasks, as they'll
-        % be used as the x-axis labels in the plots below
-        eventBetaNames = cell(interactionMaskCount,1);
-        for curMask = 1:interactionMaskCount
-            eventBetaNames{curMask} = interactionMasks{curMask}.name;
-        end
-        
-        % print out bar plots of the top voxels
-        for curTop = 1:TOP_VOXEL_COUNT
-            
-            % make an invisible bar plot of the event beats for this voxel
-            curEventBetas = eventBetas(:,topCCValIdxs(curTop));
-            f = figure('Visible', 'off');
-            set(f, 'WindowStyle', 'docked');
-            bar(curEventBetas);
-            set(gca,'XTickLabel',eventBetaNames);
-            
-            % create the filename for the current plot and save it
-            curTopFilename = sprintf('topVoxel%02i_X%i-Y%i-Z%i_cc%3f_BetaPlot.png', curTop, topX(curTop), topY(curTop), topZ(curTop), topCCVal(curTop));
-            curTopFilename = fullfile(niftisDir, curTopFilename);
-            print('-dpng', curTopFilename);
-        end
+        plotTopVoxels(estDir, valDir, niftisDir, featureNames, header.dim, binsFIR, TOP_VOXEL_COUNT);
     end
 end
 end

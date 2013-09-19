@@ -1,7 +1,7 @@
 function exper = wrapperCreateExperiment(subj, options)
 
 % create the filename for the experiment
-experimentFilename = fullfile(options.outputFolder,options.modelName,sprintf('experiment-%s.mat',date));
+experimentFilename = fullfile(options.outputFolder,options.modelName,subj,sprintf('experiment-%s.mat',date));
 
 % if it already exists, then load it and return
 if exist(experimentFilename, 'file')

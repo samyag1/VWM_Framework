@@ -1,4 +1,4 @@
-function opt= mrifRun(xpmt,chunkIdx,features,opt)
+function opt= mrifRun(xpmt,chunkIdx,features,featuresNuissanceEst,featuresNuissanceVal,opt)
 %opt= mrifRun(xpmt,chunkIdx,features,opt)
 %------------------------------------------------------------------
 
@@ -24,6 +24,7 @@ addBias = opt.addBias;
 estDir = xpmt.estDir;
 valDir = xpmt.valDir;
 snrDir = xpmt.snrDir;
+sessionDir = xpmt.sessionDir;
 
 runFolds = xpmt.runFold{opt.condIdx};
 nRuns = numel(runFolds);
@@ -34,9 +35,14 @@ estType = opt.estType;
 crossValFolds = opt.crossValFolds;
 averageCrossValFolds = opt.averageCrossValFolds;
 crossValSignificant = opt.crossValSignificant;
+useSingleLambda = opt.useSingleLambda;
 
 % this is list of the bin offsets to use for the FIR model
 binsFIR = opt.binsFIR;
+
+
+onlyUseStimVols = opt.onlyUseStimVols;
+onlyUseStimVolsOffset = opt.onlyUseStimVolsOffset;
 
 % ***NOTE*** THIS ASSUMES THE BINS ARE REPEATED IN BLOCKS. IF THAT CHANGES
 % (TO REPEAT EACH REGRESSOR TOGETHER FOR EXAMPLE) THIS MUST CHANGE TOO!!
@@ -90,22 +96,41 @@ for run = 1:nRuns
     %-----------------------------------------------------------------
     % DATA LOADING STUFF ...
     Y0 = loadVoxDat(fullfile(runFold,[dataPrefix,'*.nii']),chunkIdx);	
-	
+    
     % remove variance do to nuissance regressors from the BOLD signal
     switch lower(opt.mode)
         case 'est'
-            if numel(opt.removeNuissanceFilenamesEst) > 0
-                Y0N = removeNuisssanceVariance(Y0, runFold, opt.removeNuissanceFilenamesEst);
+            
+            % create the design matrix for nuissance regressors with FIR Bins
+            XNuissanceFIREst = [];
+            if numel(featuresNuissanceEst) > 0
+                [XNuissanceFIREst,~] = featuresToDesignMatrix(xpmt.stimFile{opt.condIdx}{run}, ...
+                    featuresNuissanceEst, paradigm.presHz,paradigm.TR,paradigm.nDummy,0,[],binsFIR, stimAsFeatures);
+            end
+            
+            if numel(opt.removeNuissanceFilenamesEst) > 0 || numel(XNuissanceFIREst) > 0
+                Y0N = removeNuisssanceVariance(Y0, runFold, opt.removeNuissanceFilenamesEst, XNuissanceFIREst);
             else
                 Y0N = Y0;
             end
         case {'val', 'snr'}
-            if numel(opt.removeNuissanceFilenamesVal) > 0
-                Y0N = removeNuisssanceVariance(Y0, runFold, opt.removeNuissanceFilenamesVal);
+            
+            % create the design matrix for nuissance regressors with FIR Bins
+            XNuissanceFIRVal = [];
+            if numel(featuresNuissanceVal) > 0
+                [XNuissanceFIRVal,~] = featuresToDesignMatrix(xpmt.stimFile{opt.condIdx}{run}, ...
+                    featuresNuissanceVal, paradigm.presHz,paradigm.TR,paradigm.nDummy,0,[],binsFIR, stimAsFeatures);
+            end
+            
+            if numel(opt.removeNuissanceFilenamesVal) > 0 || numel(XNuissanceFIRVal) > 0
+                Y0N = removeNuisssanceVariance(Y0, runFold, opt.removeNuissanceFilenamesVal, XNuissanceFIRVal);
             else
                 Y0N = Y0;
             end
+        otherwise
+            Y0N = Y0;
     end
+    clear Y0;
     
     % only do polynomial detrending if the options say to
     switch opt.detrendType
@@ -118,15 +143,16 @@ for run = 1:nRuns
             nMinutes = opt.detrendWindow;
             windowSize = round(nMinutes*60/xpmt.TR{opt.condIdx});
             windowSize = windowSize + mod(mod(windowSize,2)+1,2); % ENSURE ODD WINDOW
-            windowSize = min(size(Y0,1), windowSize); % ensure window is no bigger than time series
-            dp = sgolayfilt(Y0,opt.detrendPolyDeg,windowSize);
-            Y0D = Y0 - dp;
+            windowSize = min(size(Y0N,1), windowSize); % ensure window is no bigger than time series
+            dp = sgolayfilt(Y0N,opt.detrendPolyDeg,windowSize);
+            Y0D = Y0N - dp;
             driftParams = [driftParams dp];
             N = [];
         otherwise
             Y0D = Y0N;
             N = [];
     end
+    clear Y0N;
     
     % only zscore if the options say to
     if opt.zscore
@@ -136,32 +162,42 @@ for run = 1:nRuns
         Y0Z = Y0D;    
     end
     
-    Y = [Y; Y0];
-    YZ = [YZ; Y0Z];
-    clear Y0;    
-    
 	%--------------------------------------------------------------------
 	% CONCATENATE STIMULUS FEATURE MATRICES
 	[X0,curStimOrder] = featuresToDesignMatrix(xpmt.stimFile{opt.condIdx}{run}, ...
 								features, paradigm.presHz,paradigm.TR,paradigm.nDummy,0,[],binsFIR, stimAsFeatures);
-
+                            
     if numel(opt.modelNuissanceFilenames) > 0
         XNu0 = readNuissanceFiles(runFold, opt.modelNuissanceFilenames);
-        if opt.zscore
-            XNu0Z = zscore(XNu0);
-        else
-            XNu0Z = XNu0;
-        end
     else
         XNu0 = [];
-        XNu0Z = [];
+    end
+
+    % remove all trials except those witha given offset from stim
+    % presentation to account for variance due to image on/off
+    if onlyUseStimVols
+        useVols = find(curStimOrder~=0)+onlyUseStimVolsOffset;
+        Y0D = Y0D(useVols,:);
+        Y0Z =Y0Z(useVols,:);
+        X0 = X0(useVols,:);
+        curStimOrder = curStimOrder(useVols,:);
+        if numel(XNu0) > 0
+            XNu0 = XNu0(useVols,:);
+        end
     end
                             
     % only zscore if the options say to
     if opt.zscore
         X0Z = zscore(X0);
+
+        if numel(opt.modelNuissanceFilenames) > 0
+            XNu0Z = zscore(XNu0);
+        else
+            XNu0Z = XNu0;        
+        end
     else
         X0Z = X0;
+        XNu0Z = XNu0;
     end
 
     % Sam - TODO - if the X is stimAsFeatures, then concatonating doesn't
@@ -187,6 +223,9 @@ for run = 1:nRuns
     end
 
     stimOrder = [stimOrder;curStimOrder];
+    
+    Y = [Y; Y0D];
+    YZ = [YZ; Y0Z];
 
 end % (END RUN LOOP)s
 
@@ -195,13 +234,23 @@ fprintf('\nProcessing:');
 switch lower(opt.mode)
     % - HRF/RESPONSE AMPLITUDE ESTIMATION
     case {'est'}
-		estFile = fullfile(estDir,sprintf('%04d.mat',opt.chunkNum));
+        
+        estFile = fullfile(estDir,sprintf('%04d.mat',opt.chunkNum));
         
         if exist(estFile, 'file')
             fprintf('Estimation Chunk: %i already estimated. Skipping estimation', opt.chunkNum);
         else
+
+            % write out the design matrices
+            if opt.writeDesignMatrix
+                designMatFile = fullfile(sessionDir,'designMatrixEst.mat');
+                if not(exist(designMatFile, 'file'))
+                    save(designMatFile, 'X', 'XZ', 'XNu', 'XNuZ');
+                end
+            end
+            
             fprintf('Calculating feature weights.\n');
-            model=mrifEstimate(YZ,XZ,addBias, estType, crossValFolds, nRuns, 'Runs', averageCrossValFolds, XNuZ, excludeValFeatures, crossValSignificant);
+            model=mrifEstimate(YZ,XZ,addBias, estType, crossValFolds, nRuns, 'Runs', averageCrossValFolds, useSingleLambda, XNuZ, excludeValFeatures, crossValSignificant);
             model.voxFit = chunkIdx;
             model.driftBasis = N;
             model.driftParams = driftParams;
@@ -219,6 +268,14 @@ switch lower(opt.mode)
         else
             estFile = fullfile(estDir,sprintf('%04d.mat',opt.chunkNum));
             weights =loadSubField(estFile,'model','weights');
+            
+            % write out the design matrices
+            if opt.writeDesignMatrix
+                designMatFile = fullfile(sessionDir,'designMatrixVal.mat');
+                if not(exist(designMatFile, 'file'))
+                    save(designMatFile, 'X', 'XZ', 'XNu', 'XNuZ');
+                end
+            end
             
             % take the mean of the each validation run and calculate
             % prediction accuracy on those values. This assumes that the
@@ -308,7 +365,7 @@ switch lower(opt.mode)
             end
             
             % create the feature x FIR bin prediction matrix
-            model.averageValRuns = opt.averageValRuns
+            model.averageValRuns = opt.averageValRuns;
             model.binsFIR = opt.binsFIR;
             model.voxFit = chunkIdx;
             model.driftBasis = N;
@@ -388,7 +445,7 @@ switch lower(opt.mode)
                 % since we're making the stim actual features, make a design
                 % matrix that is as wide as the stim count for all the runs and
                 % set the design matrices above along the diagonals
-                XZ = zeros(dataCount, totalStimIDFeatures);
+                XStim = zeros(dataCount, totalStimIDFeatures);
                 timeCounter = 0;
                 featureCounter = 0;
                 for curRunXIdx = 1:numel(XRunsList)
@@ -405,10 +462,14 @@ switch lower(opt.mode)
                         featureCounter = curRunEndFeatureIdx;
                     end
                                             
-                    XZ(curRunStartTimeIdx:curRunEndTimeIdx,curRunStartFeatureIdx:curRunEndFeatureIdx) = curRunX;
+                    XStim(curRunStartTimeIdx:curRunEndTimeIdx,curRunStartFeatureIdx:curRunEndFeatureIdx) = curRunX;
                 end
                 
-              %  XZ = zscore(XZ);
+                if opt.zscore
+                    XStimZ = zscore(XStim);
+                else
+                    XStimZ = XStim;
+                end
                 
                 volCount = size(YZ,1);
             
@@ -454,7 +515,15 @@ switch lower(opt.mode)
                 
                 % This is estimating weights for stimuli as features, which
                 % should give an estimate of explainable variance
-                model=mrifEstimate(YZ,XZ,addBias, estType, repetitionCount, nRuns, crossValAssignments);
+                model=mrifEstimate(YZ,XStimZ,addBias, estType, repetitionCount, nRuns, crossValAssignments, false, useSingleLambda);
+            
+                % write out the design matrices
+                if opt.writeDesignMatrix
+                    designMatFile = fullfile(sessionDir,'designMatrixSNR.mat');
+                    if not(exist(designMatFile, 'file'))
+                        save(designMatFile, 'XStim', 'XStimZ');
+                    end
+                end
             end
             
             if opt.writeMeanVar
@@ -484,7 +553,7 @@ switch lower(opt.mode)
             % store the general values here
             model.voxFit = chunkIdx;
             model.info = paradigm;
-            if opt.polyDeg > 0
+            if opt.detrendPolyDeg > 0
                 model.driftBasis = N;
                 model.driftParams = driftParams;
             end

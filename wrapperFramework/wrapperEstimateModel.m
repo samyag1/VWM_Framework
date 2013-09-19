@@ -13,18 +13,7 @@ end
 wrapperOptions.runCount = numel(wrapperOptions.estRuns) + numel(wrapperOptions.valRuns);
 %wrapperOptions.stimCount = wrapperOptions.sessCount*(numel(wrapperOptions.estRuns)*wrapperOptions.estStim + numel(wrapperOptions.valRuns)*wrapperOptions.valStim);
 
-% delete the input files created by this script so they will be remade
-if clearInput
-    clearInputFiles(wrapperOptions);
-end
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Create Paradigms
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-% create the paradigm files, if they're not already created. These contain
-% the order of the stimuli as presented
-stimIDMapFilename = wrapperCreateParadigms(wrapperOptions);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Run subjects
@@ -35,6 +24,35 @@ for i = 1:numel(subjects)
     
     % get the current subject folder name
     subj = subjects{i};
+    
+    % create the paradigm and features folders
+    modelFolder = fullfile(wrapperOptions.outputFolder, wrapperOptions.modelName);
+    wrapperOptions.paradigmFolder = fullfile(modelFolder, subj, 'paradigms');
+    wrapperOptions.featuresFolder = fullfile(modelFolder, subj, 'features');
+    
+    % if the model folder doesn't exist, create it
+    if ~isdir(modelFolder)
+        mkdir(modelFolder)
+    end
+    if ~isdir(wrapperOptions.paradigmFolder)
+        mkdir(wrapperOptions.paradigmFolder)
+    end
+    if ~isdir(wrapperOptions.featuresFolder)
+        mkdir(wrapperOptions.featuresFolder)
+    end
+    
+    % delete the input files created by this script so they will be remade
+    if clearInput
+        clearInputFiles(wrapperOptions);
+    end
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Create Paradigms
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    % create the paradigm files, if they're not already created. These contain
+    % the order of the stimuli as presented
+    stimIDMapFilename = wrapperCreateParadigms(wrapperOptions);
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Create Experiment
@@ -73,13 +91,56 @@ for i = 1:numel(subjects)
     if wrapperOptions.useSimpleRegressors
         % create the features to use. This returns a matrix with the regressor
         % values for all the stimuli, in the order
-        [features, featureNames, interactionMasks, valCompFeatures] = wrapperCreateFeaturesSimple(subj, wrapperOptions, stimIDMapFilename);
-        % simple regressors doesn't support nuissance events...
-        excludeValFeatures = [];
+        [features, featureNames, interactionMasks, valCompFeatures] = wrapperCreateFeaturesSimple(subj, ...
+            stimIDMapFilename, ...
+            'features', ...
+            wrapperOptions.featuresFolder, ...
+            wrapperOptions.regressorsFolder, ...
+            wrapperOptions.regressorFilenames, ...
+            wrapperOptions.estReps, ...
+            wrapperOptions.valReps, ...
+            wrapperOptions.stimTotalThreshold);
+
+        %%%%%%%%%%WARNING HACK!!!%%%%%%%%%%%%%%%%%%%%%%%%%
+        % Just assume that the nuissance event is in the first files passed in, and
+        % that it indexes the column in that first file. FIX THIS
+        excludeValFeatures = wrapperOptions.regressorNuissanceEvents;
     else
         % create the features to use. This returns a matrix with the regressor
         % values for all the stimuli, in the order
         [features, featureNames, interactionMasks, valCompFeatures, excludeValFeatures] = wrapperCreateFeatures(subj, wrapperOptions, stimIDMapFilename);
+    end
+    
+    featuresNuissanceEst = [];
+    featureNuissanceNamesEst = [];
+    if numel(wrapperOptions.regressorRemoveNuissanceFilenamesFIREst) > 0
+        % create a features matrix for nuissance regressors that are to be
+        % removed before the model, but have FIR bins
+        [featuresNuissanceEst, featureNuissanceNamesEst, ~, ~] = wrapperCreateFeaturesSimple(subj, ...
+            stimIDMapFilename, ...
+            'featuresNuissanceEst', ...
+            wrapperOptions.featuresFolder, ...
+            wrapperOptions.regressorsFolder, ...
+            wrapperOptions.regressorRemoveNuissanceFilenamesFIREst, ...
+            wrapperOptions.estReps, ...
+            wrapperOptions.valReps, ...
+            wrapperOptions.stimTotalThreshold);
+    end
+    
+    featuresNuissanceVal = [];
+    featureNuissanceNamesVal = [];
+    if numel(wrapperOptions.regressorRemoveNuissanceFilenamesFIRVal) > 0
+        % create a features matrix for nuissance regressors that are to be
+        % removed before the model, but have FIR bins
+        [featuresNuissanceVal, featureNuissanceNamesVal, ~, ~] = wrapperCreateFeaturesSimple(subj, ...
+            stimIDMapFilename, ...
+            'featuresNuissanceVal', ...
+            wrapperOptions.featuresFolder, ...
+            wrapperOptions.regressorsFolder, ...
+            wrapperOptions.regressorRemoveNuissanceFilenamesFIRVal, ...
+            wrapperOptions.estReps, ...
+            wrapperOptions.valReps, ...
+            wrapperOptions.stimTotalThreshold);
     end
     
     % this vector indicates the indices of the features that will be used
@@ -97,6 +158,13 @@ for i = 1:numel(subjects)
     % we must pass in the features minus those excluded
     useFeatureNames = featureNames;
     useFeatureNames(excludeValFeatures) = [];
+
+    % transfer the nuissance regressor filenames from the wrapper to the
+    % mrifOptions, as that's where they're used
+    mrifOptions.removeNuissanceFilenamesEst = wrapperOptions.removeNuissanceFilenamesEst;
+    mrifOptions.removeNuissanceFilenamesVal = wrapperOptions.removeNuissanceFilenamesVal;
+    mrifOptions.modelNuissanceFilenames = wrapperOptions.modelNuissanceFilenames;
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Estimate model
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -109,11 +177,15 @@ for i = 1:numel(subjects)
         voxIdxs = wrapperVoxelSelection(wrapperOptions, subj);
     end
     
+    % save the options before running the model
+    optionsFilename = fullfile(modelFolder, 'options.mat');
+    save(optionsFilename, 'wrapperOptions', 'mrifOptions');
+    
     % fit the FIR model which uses elastic net and leave one out
     % cross-validation to estimate the weights
-    mriFit(experiment, subj, sessionsToAnalyze, features, mrifOptions, voxIdxs);
+    mriFit(experiment, subj, sessionsToAnalyze, features, featuresNuissanceEst, featuresNuissanceVal, mrifOptions, voxIdxs);
     
     % create niftis files of the beta weights and correlation coefficients
     % by concatonating all the model fits
-    wrapperCreateOutputFiles(experiment, subj, sessionsToAnalyze, useFeatureNames, interactionMasks, mrifOptions);
+    wrapperCreateOutputFiles(experiment, subj, sessionsToAnalyze, useFeatureNames, interactionMasks, wrapperOptions.writeTopVoxels, mrifOptions);
 end

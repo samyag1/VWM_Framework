@@ -1,4 +1,4 @@
-function [opt] = mriFit(experiment,subj,sessIdx,features,opt,voxIdx)
+function [opt] = mriFit(experiment,subj,sessIdx,features,featuresNuissanceEst,featuresNuissanceVal,opt,voxIdx)
 %optOut= mriFit(exper,subj,sessIdx,features,optIn,voxIdx)
 %----------------------------------------------------------------------------
 % Models time series data for a set of voxels:
@@ -127,11 +127,11 @@ for curModeIdx = 1:numel(opt.modes)
                     % GET SLURM ID; SAVE INPUTS; SEND TO SLURM
                     slurmID = ['mrifRun_',opt.mode,'_Sess0',num2str(sess),'_',sprintf('%04d',chunk)];
                     saveFile = fullfile(slurmDir,'variables',[slurmID,'.mat']);
-                    save(saveFile,'xpmt','chunkIdx','opt','features');
+                    save(saveFile,'xpmt','chunkIdx','opt','features','featuresNuissanceEst','featuresNuissanceVal');
                     jobID = mrifRunParallel(slurmDir,slurmID,saveFile, chunk);
                     jobIDs = [jobIDs jobID];
                 else
-                    opt = mrifRun(xpmt,chunkIdx,features,opt);
+                    opt = mrifRun(xpmt,chunkIdx,features,featuresNuissanceEst,featuresNuissanceVal,opt);
                 end
             end
         end% (END CHUNK LOOP)
@@ -145,6 +145,10 @@ for curModeIdx = 1:numel(opt.modes)
         disp(jobIDs);
         waitForQueue(jobIDs);
     end
+    
+    % there are some tasks that require all the voxels to determine, such
+    % as finding a single value of lambda for all voxels.
+    mrifPostRun(xpmt, opt);
     
     % display starting message
     switch opt.mode
@@ -201,7 +205,7 @@ comstr0 = '#!/bin/bash';
 comstr1 = ['/auto/k2/share/matlab/matlab80/bin/matlab -singleCompThread -r "'];
 comstr2 = ['addpath(genpath(''/auto/k2/spm8''));addpath(genpath(''/auto/k1/samyag1/code/mriTools''));addpath(genpath(''/auto/k1/samyag1/code/utils''));addpath(genpath(''/auto/k1/samyag1/code/wrapper''));addpath(genpath(''/auto/k1/samyag1/IAPS/analysis/scripts/''));'];
 comstr3 =['load ',sprintf('%s',saveFile),';'];
-comstr4 = 'opt = mrifRun(xpmt,chunkIdx,features,opt);exit"';
+comstr4 = 'opt = mrifRun(xpmt,chunkIdx,features,featuresNuissanceEst,featuresNuissanceVal,opt);exit"';
 
 % WRITE THE SCRIPT
 fid = fopen(scriptFile,'w');

@@ -76,6 +76,10 @@ defOpt =  struct('onSlurm', 1, ...
                  'averageCrossValFolds',false, ... % when true the prediction accuracy of the cross val folds during estimation (which also affects the noise ceiling calculation) will be averaged. When false one prediction value will calculated by concatonating all the predictions together. THe later is most likely what you wan, unless you need a variance measure over the predictions. 
                  'crossValSignificant',.05, ... % the p-value associated with the prediction accuracy (r-value) considered to be significant. This is how the neoise ceiling threhold used to determine which voxels are considered to hvae enough signal to care about.
                  'noiseCeilingIgnoreReps',[], ... % If our data has a non-stationarity then we may want to exclude certain repititions of the validation set when doing the noise ceililng calculation. This specifies the reps to withhold
+                 'onlyUseStimVols',false, ... % indicates whether to only include volumes that are of a given offset (blwo) where stim are presented
+                 'onlyUseStimVolsOffset',2, ...
+                 'writeDesignMatrix',false, ... % whether to write out the design matrix to a file.
+                 'useSingleLambda',true, ... % whether to select the ridge hyper parameter lambda per voxel, or select one for all the voexels
                  'excludeValFeatures',[]); % NOT TO BE SET, DONE INTERNALL. This is for nuissance regressors that are stim based and so have FIR binning. This tells the framework to include in the estimation model, but not the validation prediction. 
 				  
 

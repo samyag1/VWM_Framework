@@ -32,9 +32,17 @@ options.maskFolder = '';
 options.outputFolder = '';
 options.dicomFolder = '';
 options.niftiFolder =  '';
+options.estReps = 0;
+options.valReps = 0;
+options.estStim = 0;
+options.valStim = 0;
 
 options.doVoxelSelection = false;
 options.voxelSelectionMask = '';
+
+% whether to write out histograms of the "receptive fields" (beta weights)
+% of the top predicting voxels
+options.writeTopVoxels = false;
 
 % use the simple system to define regressors. This requires one or more
 % files that contain headers indicating the regressor names, and assumes
@@ -42,14 +50,24 @@ options.voxelSelectionMask = '';
 % the spreadsheets
 options.useSimpleRegressors = false;
 
+% this is the total number of stim per feature, below which the feature
+% will be excluded
+options.stimTotalThreshold = 5;
+
 % features options
 options.regressorNames = {};
-options.regressorInteractions = [];
+options.regressorInteractions = {};
+options.regressorInteractionMasks = {};
 options.regressorEvents = [];
 options.regressorFilenames = {};
 options.regressorCategorical = [];
 options.regressorCategoricalNames = {};
 options.regressorValComp = [];
-options.regressorNuissanceEvents = {};
+options.regressorNuissanceEvents = [];
+options.regressorRemoveNuissanceFilenamesFIREst = {};
+options.regressorRemoveNuissanceFilenamesFIRVal = {};
+options.removeNuissanceFilenamesEst = {};
+options.removeNuissanceFilenamesVal = {};
+options.modelNuissanceFilenames = {};
 
 end

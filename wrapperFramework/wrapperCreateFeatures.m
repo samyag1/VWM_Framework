@@ -262,6 +262,9 @@ for curKeyIdx = 1:stimIDMap.Count
             % get the current filename to regressor value map
             curRegressorMap = regressorMaps{curStimRegressorIdx};
             
+            if ~curRegressorMap.isKey(curStimFilename)
+                fprintf('The following stim file: %s is in the stimOrder files but not the regressor file: %s', curStimFilename, options.regressorFilenames{curStimRegressorIdx});
+            end
             % get the current regressor's list of values for this stim
             curRegressorValueList = curRegressorMap(curStimFilename);
             
@@ -476,13 +479,31 @@ for curMask = 1:maskCount
     end
 end
 
-
-% TODO - verify that all features have at least 1 stimulus associated with
-% it. If some don't, then remove them from the features matrix and
-% featureNames vector, and write out a warning message
+    
+% determine if any features have less than the thresholded number of
+% stimuli, and remove those
+stimTots = sum((features(:,:,1)~=0),1);
+belowThresholdIdxs = find(stimTots < options.stimTotalThreshold);
+belowThresholdFeatures = {};
+if numel(belowThresholdIdxs) > 0
+    fprintf('The following features have less stimuli than the given threshold of %i', options.stimTotalThreshold);
+    
+    % store the featurenames that are below thredholds for
+    % documentation
+    belowThresholdFeatures = featureNames(belowThresholdIdxs);
+    
+    % write out the features below the threshold
+    for curBelowFeature = 1:numel(belowThresholdFeatures)
+        fprinf(belowThresholdFeatures{curBelowFeature});
+    end
+    
+    % remove the features from the features matrix
+    features(:,belowThresholdIdxs,:) = [];
+    featureNames(belowThresholdIdxs) = [];
+end
 
 % write out the features matrix
-save(featuresFilename, 'features', 'featureNames', 'regressorNames', 'regressorStartIndices', 'interactionMasks', 'valCompFeatures', 'excludeValFeatures');
+save(featuresFilename, 'features', 'featureNames', 'regressorNames', 'regressorStartIndices', 'interactionMasks', 'valCompFeatures', 'excludeValFeatures', 'belowThresholdFeatures', 'stimIDFilenames');
 
 end
 

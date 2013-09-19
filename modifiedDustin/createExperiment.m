@@ -151,6 +151,7 @@ for sess = 1:numSessions
     % SAM this is where the model output will be saved
     exp.outputDir = outputDir;
     sessionPath = fullfile(exp.outputDir, 'modeling', exp.sessID);
+    exp.sessionDir = sessionPath;
     exp.estDir = fullfile(sessionPath, 'est');
     exp.valDir = fullfile(sessionPath, 'val');
     exp.snrDir = fullfile(sessionPath, 'snr');

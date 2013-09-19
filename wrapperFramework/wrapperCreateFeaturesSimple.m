@@ -1,8 +1,8 @@
-function [features, featureNames, interactionMasks, valCompFeatures, excludeValFeatures] = wrapperCreateFeaturesSimple(subject, options, stimIDMapFilename)
+function [features, featureNames, interactionMasks, valCompFeatures] = wrapperCreateFeaturesSimple(subject, stimIDMapFilename, featureMatName, featuresFolder, regressorsFolder, regressorFilenames, estReps, valReps, stimTotalThreshold)
 
 % make the filename for the features structure
-featuresFilename = sprintf('features_%s.mat', subject);
-featuresFilename = fullfile(options.featuresFolder, featuresFilename);
+featuresFilename = sprintf('%s_%s.mat', featureMatName, subject);
+featuresFilename = fullfile(featuresFolder, featuresFilename);
 
 % if the features file has already been created, then load it and return
 if exist(featuresFilename, 'file')
@@ -14,12 +14,12 @@ end
 % calculate the level count and start indices for each
 featureNames = {};
 featureMaps = {};
-regressorFilenameCount = numel(options.regressorFilenames);
+regressorFilenameCount = numel(regressorFilenames);
 for curRegressorIdx = 1:regressorFilenameCount
 
     % get the current regressor name and filename
-    regressorFilename = options.regressorFilenames{curRegressorIdx};
-    regressorFilename = fullfile(options.regressorsFolder, regressorFilename);
+    regressorFilename = regressorFilenames{curRegressorIdx};
+    regressorFilename = fullfile(regressorsFolder, regressorFilename);
     
     % determine the file type (CSV, excel, mat) and load
     % appropriately
@@ -77,16 +77,34 @@ for curRegressorIdx = 1:regressorFilenameCount
     end
     
     % for each regressor stored in this file, create a map
-    for curColumn = 1:size(curHeaderVals)
+    for curColumn = 1:numel(curHeaderVals)
 
         % get the name of the current regressor
         curRegressorName = curHeaderVals{curColumn};
         
-        % create a map between stim filename and the value for this
-        % regressor
-        curRegressorMap = [curStimFilenames, curRegressorFileData(:,curColumn)];
-        curRegressorMap = Dictionary(curRegressorMap);
-
+        % Populate a mapping between filename and regressor value. This
+        % considers the case that different values are assigned to different
+        % repetitions of the same stim. When this occurs, the regressor file
+        % will contain multiple rows with the same stim filename, and the order
+        % they are within the file is the order they'll be used in the design
+        % matrix.
+        curRegressorMap = containers.Map();
+        for curImageIdx = 1:size(curStimFilenames,1)
+            
+            % get the filename and value of the current stim
+            curFilename = curStimFilenames{curImageIdx,1};
+            curVal = curRegressorFileData{curImageIdx,curColumn};
+            
+            % if this filename is already in the map, then append the current
+            % value to the list of values already in the map
+            if curRegressorMap.isKey(curFilename)
+                curVal = [curRegressorMap(curFilename) curVal];
+            end
+            
+            % store the current value in the map
+            curRegressorMap(curFilename) = curVal;
+        end
+        
         % store the regressors map and name
         featureMaps{end+1} = curRegressorMap;
         featureNames{end+1} = curRegressorName;
@@ -107,7 +125,8 @@ stimIDFilenames = stimIDMap.Keys;
 % define the features matrix that stores the regressor values for all the
 % stimuli, where the order is determined by the values in the stimOrder
 % files
-features = zeros(stimIDMap.Count, featureCount);
+maxReps = max(estReps, valReps);
+features = zeros(stimIDMap.Count, featureCount, maxReps);
 
 % iterate through the unique IDs and add a row to the features
 % vector for each one.
@@ -117,21 +136,44 @@ for curKeyIdx = 1:stimIDMap.Count
     curStimFilename = stimIDFilenames{curKeyIdx};
     curStimIdx = stimIDMap(curStimFilename);
     
-    % now iterate through all the regressors and add them to the features
-    % matrix
-    for curStimRegressorIdx = 1:featureCount
+    % populate all the rep values for the current
+    for curRep = 1:maxReps
         
-        % get the current filename to regressor value map
-        curRegressorMap = featureMaps{curStimRegressorIdx};
-        
-        % get the current regressor's value for this stim
-        curRegressorValue = curRegressorMap(curStimFilename);
-
-        % otherwise it's continuous, so store the current regressor
-        % value in the correct cell of the features matrix. Add 1 to
-        % the start index since all continuous regressors in essence
-        % have 1 continous level
-        features(curStimIdx, curStimRegressorIdx) = curRegressorValue;
+        % now iterate through all the regressors and add them to the features
+        % matrix
+        for curStimRegressorIdx = 1:featureCount
+            
+            % get the current filename to regressor value map
+            curRegressorMap = featureMaps{curStimRegressorIdx};
+            
+            % get the current regressor's list of values for this stim
+            curRegressorValueList = curRegressorMap(curStimFilename);
+            
+            % if the list is the max number of reps for this experiment
+            % (probably the validation reps), then just store those
+            if numel(curRegressorValueList) == maxReps
+                curRegressorValue = curRegressorValueList(curRep);
+                % otherwise create a list the length of maxReps populated with NaNs
+            else
+                % and if this regressor is the same for all features (because
+                % there's only 1 copy of it in the regressor file), then use it
+                curRegressorValue = 0;
+                if numel(curRegressorValueList) == 1
+                    curRegressorValue = curRegressorValueList;
+                    % otherwise it's likely a per trial estimation regressor, so
+                    % use a value if there is one for this rep, otherwise let it
+                    % defualt to 0
+                elseif curRep <= numel(curRegressorValueList)
+                    curRegressorValue = curRegressorValueList(curRep);
+                end
+            end
+            
+            % otherwise it's continuous, so store the current regressor
+            % value in the correct cell of the features matrix. Add 1 to
+            % the start index since all continuous regressors in essence
+            % have 1 continous level
+            features(curStimIdx, curStimRegressorIdx, curRep) = curRegressorValue;
+        end
     end
 end
 
@@ -146,13 +188,31 @@ end
 % indices into the features matrix corresponding with the levels it takes
 valCompFeatures = [];
 interactionMasks = [];
-excludeValFeatures = [];
-if numel(options.regressorNuissanceEvents) > 0
-    fprintf('\n\nWARNING: Using simple feature creation with nuissance events, which is not supported. No nuissance events made.\n\n');
+
+    
+% determine if any features have less than the thresholded number of
+% stimuli, and remove those
+stimTots = sum((features(:,:,1)~=0),1);
+belowThresholdIdxs = find(stimTots < stimTotalThreshold);
+belowThresholdFeatures = {};
+if numel(belowThresholdIdxs) > 0
+    fprintf('The following features have less stimuli than the given threshold of %i', stimTotalThreshold);
+    
+    % store the featurenames that are below thredholds for
+    % documentation
+    belowThresholdFeatures = featureNames(belowThresholdIdxs);
+    
+    % write out the features below the threshold
+    for curBelowFeature = 1:numel(belowThresholdFeatures)
+        fprinf(belowThresholdFeatures{curBelowFeature});
+    end
+    
+    % remove the features from the features matrix
+    features(:,belowThresholdIdxs,:) = [];
+    featureNames(belowThresholdIdxs) = [];
 end
 
-
 % write out the features matrix
-save(featuresFilename, 'features', 'featureNames', 'interactionMasks', 'valCompFeatures');
+save(featuresFilename, 'features', 'featureNames', 'interactionMasks', 'valCompFeatures', 'belowThresholdFeatures', 'stimIDFilenames');
 
 end

@@ -1,4 +1,4 @@
-function model = mrifEstimate(Y,X,addBias, estType, crossvalFolds, runCount, crossvalType, averageCrossValFolds, XNu, excludeValFeatures,crossValSignificant)
+function model = mrifEstimate(Y,X,addBias, estType, crossvalFolds, runCount, crossvalType, averageCrossValFolds, useSingleLambda, XNu, excludeValFeatures,crossValSignificant)
 %  model = mrifEstimate(Y,X,addBias);
 %------------------------------------------------------------------------
 % CROSSVALIDATED OLS
@@ -19,8 +19,11 @@ end
 if notDefined('crossvalType')
     crossvalType= 'Runs';
 end
-if notDefined('calcPredByFold')
+if notDefined('averageCrossValFolds')
     averageCrossValFolds = false;
+end
+if notDefined('useSingleLambda')
+    useSingleLambda = true;
 end
 if notDefined('XNu')
     XNu = [];
@@ -186,7 +189,7 @@ elseif strcmp(estType, 'ridge')
         % figure out the indices (voxels) to use for this CV iteration.
         % Exclude any volumes that have a 0 in the crossValAssignments
         estUseVector = part~=curFold;
-        estUseVector(estUseVector==0) = [];
+        estUseVector(find(part==0)) = 0;
         valUseVector = part==curFold;
         
         % create the x and Y subsets to use in estimation and predication
@@ -231,18 +234,14 @@ elseif strcmp(estType, 'ridge')
     end
     fprintf('\nDetermining best cross-validation fit...');
     
-    % determine the weights to use per voxel
-    weightsFinal = zeros(nFeat,nVox);
-    if nNuissanceFeat > 0
-        nuissanceWeightsFinal = zeros(nNuissanceFeat,nVox);
-    end
+    % determine the prediction accuracies across all folds
     ccFinal = zeros(nVox,lambdaCount);
 %    cIFinal = zeros(nVox,lambdaCount,2);
     mseFinal = zeros(nVox,lambdaCount);
     r2Final = zeros(nVox,lambdaCount);
-    lambdasUsed = zeros(nVox,1);
+    
+    % calculate the prediction accuracy
     for curVox = 1:nVox
-        
         % if prediction is to be calculated across folds, then take the
         % average across folds
         if averageCrossValFolds
@@ -252,33 +251,20 @@ elseif strcmp(estType, 'ridge')
             ccFinal(curVox,:) = mean(ccMaster(:,:,curVox),2);
             r2Final(curVox,:) = mean(r2Master(:,:,curVox),2);
             
-        % otherwise, we'll calculate a single correlation value per
-        % lambda value
+            % otherwise, we'll calculate a single correlation value per
+            % lambda value
         else
             for curLambda = 1:lambdaCount
-                mseFinal(curVox,curLambda) = mean((predMaster(:,curVox,curLambda) - Y(:,curVox)).^2,1); 
+                mseFinal(curVox,curLambda) = mean((predMaster(:,curVox,curLambda) - Y(:,curVox)).^2,1);
                 [ccTemp, cITemp] = ccMatrix(predMaster(:,curVox,curLambda), Y(:,curVox),1);
                 ccFinal(curVox, curLambda) = ccTemp;
-%               cIMaster(curVox,curLambda,:) = reshape(cITemp',1,2);
+                %               cIMaster(curVox,curLambda,:) = reshape(cITemp',1,2);
                 r2Final(curVox,curLambda) = calcR2(Y(:,curVox),predMaster(:,curVox,curLambda));
             end
         end
-        
-        % get the lambda index that was best for the current voxel
-        [~,bestLambdaIdx] = max(ccFinal(curVox,:));
-        lambdasUsed(curVox) = bestLambdaIdx;
-        
-        % now get the set of sets of weights calculated for the max lambda
-        % where there are K sets, one for each cross-validation iteration
-        weightsFinal(:,curVox) = mean(squeeze(weights(:,curVox,bestLambdaIdx,:)),2);
-        
-        % if there are nuissance regressors, then store the weights from
-        % the same lambdas that predicted best
-        if nNuissanceFeat > 0
-            nuissanceWeightsFinal(:,curVox) = mean(squeeze(nuissanceWeights(:,curVox,bestLambdaIdx,:)),2);
-        end
     end
-    
+
+    % calculate the r value that is significant at the value passed in
     if averageCrossValFolds
         sigCC = pval2r(crossValSignificant,numel(find(part==1)));
     else
@@ -286,20 +272,7 @@ elseif strcmp(estType, 'ridge')
     end        
     nGood = numel(find(ccFinal > sigCC));
 
-    % if a bias term was added then only save the actual feature weights
-    % into the weights field, and store those bias terms seperately
-    if addBias
-        model.weights = single(weightsFinal(1:end-runCount,:));
-        model.biasTerms = single(weightsFinal(end-runCount+1:end,:));
-    else
-        model.weights = single(weightsFinal);
-        model.biasTerms = zeros(runCount,nVox);
-    end
-	if nNuissanceFeat > 0
-        model.nuissanceWeights = single(nuissanceWeightsFinal);
-    else
-        model.nuissanceWeights = [];
-    end
+    % store the prediction accuracy and other model output
     model.mse = single(mseFinal);
     model.cc = single(ccFinal);
 %    model.ccCI = single(cIFinal);
@@ -307,7 +280,59 @@ elseif strcmp(estType, 'ridge')
     model.sigCC = sigCC;
     model.nGood = nGood;
     model.lambdas = lambdas;
-    model.lambdasUsed = lambdasUsed;
+    
+    % is we're to use a single lambda for all voxels, then simply write out
+    % the full weights to file, so it can be determined in a later step
+    % with all the chunks together
+    if useSingleLambda
+        
+        model.weightsFull = weights;
+        if nNuissanceFeat > 0
+            model.nuissanceWeightsFull = nuissanceWeights;
+        else
+            model.nuissanceWeightsFull = [];
+        end
+    % otherwise determine which lambda works best for each voxel
+    else
+        weightsFinal = zeros(nFeat,nVox);
+        if nNuissanceFeat > 0
+            nuissanceWeightsFinal = zeros(nNuissanceFeat,nVox);
+        end
+       lambdasUsed = zeros(nVox,1);
+       for curVox = 1:nVox
+                        
+            % get the lambda index that was best for the current voxel
+            [~,bestLambdaIdx] = max(ccFinal(curVox,:));
+            lambdasUsed(curVox) = bestLambdaIdx;
+        
+            % now get the set of sets of weights calculated for the max lambda
+            % where there are K sets, one for each cross-validation iteration
+            weightsFinal(:,curVox) = mean(squeeze(weights(:,curVox,lambdasUsed(curVox),:)),2);
+            
+            % if there are nuissance regressors, then store the weights from
+            % the same lambdas that predicted best
+            if nNuissanceFeat > 0
+                nuissanceWeightsFinal(:,curVox) = mean(reshape(nuissanceWeights(:,curVox,lambdasUsed(curVox),:),nNuissanceFeat,crossvalFolds),2);
+            end
+        end
+        
+        % if a bias term was added then only save the actual feature weights
+        % into the weights field, and store those bias terms seperately
+        if addBias
+            model.weights = single(weightsFinal(1:end-runCount,:));
+            model.biasTerms = single(weightsFinal(end-runCount+1:end,:));
+        else
+            model.weights = single(weightsFinal);
+            model.biasTerms = zeros(runCount,nVox);
+        end
+        if nNuissanceFeat > 0
+            model.nuissanceWeights = single(nuissanceWeightsFinal);
+        else
+            model.nuissanceWeights = [];
+        end
+        
+        model.lambdasUsed = lambdasUsed;
+    end
     
     fprintf('done\n');
     
