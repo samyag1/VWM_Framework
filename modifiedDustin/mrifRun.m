@@ -33,13 +33,30 @@ opt.nRuns = nRuns;
 % how to do the model estimation
 estType = opt.estType;
 crossValFolds = opt.crossValFolds;
+modelSelectionIndices = opt.modelSelectionIndices;
 averageCrossValFolds = opt.averageCrossValFolds;
 crossValSignificant = opt.crossValSignificant;
 useSingleLambda = opt.useSingleLambda;
+doPermutationTesting = opt.doPermutationTesting;
+permutationIters = opt.permutationIters;
+hrfType = opt.hrfType;
 
-% this is list of the bin offsets to use for the FIR model
-binsFIR = opt.binsFIR;
-
+% determine the FIR Bins variable based on the HRF estimation type
+switch(hrfType)
+    % if a deconvolution model is being used then we want to create a design
+    % matrix with the features at the TR where the stimuli appeared, so set the
+    % FIR Bin variable to 0, which will do just that
+    case {'Deconvolve'}
+        binsFIR = 0;
+    
+    % Otherwise use the fir bins passed in by the user
+    case {'FIR'}
+        
+        % this is list of the bin offsets to use for the FIR model
+        binsFIR = opt.binsFIR;
+    otherwise
+        error(sprintf('Invalid hrfType parameter provided: %s. Choices are \"Deconvolve\" and \"FIR"', hrfType));
+end
 
 onlyUseStimVols = opt.onlyUseStimVols;
 onlyUseStimVolsOffset = opt.onlyUseStimVolsOffset;
@@ -202,7 +219,7 @@ for run = 1:nRuns
 
     % Sam - TODO - if the X is stimAsFeatures, then concatonating doesn't
     % work, I need to build an empty matrix the size of all stim in all
-    % runs and fill in the "diagonals" with the matrices created above
+    % runs and fill in the diagonal blocks with the matrices created above
     if stimAsFeatures
         XRunsListZ{end+1} = X0Z;
         XRunsList{end+1} = X0;
@@ -250,7 +267,140 @@ switch lower(opt.mode)
             end
             
             fprintf('Calculating feature weights.\n');
-            model=mrifEstimate(YZ,XZ,addBias, estType, crossValFolds, nRuns, 'Runs', averageCrossValFolds, useSingleLambda, XNuZ, excludeValFeatures, crossValSignificant);
+
+            switch(hrfType)            
+                case {'FIR'}
+    
+                    % hold out 10% of the data for use in model/voxel selection
+                    % if modelSelectionIndices are given, which represent
+                    % the runs to hold out
+                    if ~isempty(modelSelectionIndices)
+                        nObs = size(YZ,1);
+                        obsPerRun = nObs / runCount;
+                        selectionIndices = zeros(nObs,1);
+                        for i = modelSelectionIndices
+                            startInd = (i-1)*obsPerRun+1;
+                            endInd = i*obsPerRun;
+                            selectionIndices(startInd:endInd) = 1;
+                        end
+                        modelSelectionY = YZ(selectionIndices,:);
+                        modelSelectionX = XZ(selectionIndices,:);
+                        modelEstimationY = YZ(~selectionIndices,:);
+                        modelEstimationX = XZ(~selectionIndices,:);
+                    else
+                        modelSelectionY = [];
+                        modelSelectionX = [];
+                        modelEstimationY = YZ;
+                        modelEstimationX = XZ;
+                    end
+                    
+                    % estimate the model with the FIR binned design matrix
+                    model=mrifEstimate(modelEstimationY,modelEstimationX,addBias, estType, crossValFolds, nRuns, 'Runs', averageCrossValFolds, useSingleLambda, XNuZ, excludeValFeatures, crossValSignificant);
+                    
+                    % if there is model selection data, then predict it
+                    if ~isempty(modelSelectionY)
+                        % calculate the prediction accuracy
+                        modelSelection = mrifForward(modelSelectionY,modelSelectionX,model.weights,addBias,[]);
+                        model.heldOutCC = modelSelection.cc;
+                        model.heldOutCI = modelSelection.cI;
+                        model.heldOutPred = modelSelection.pred;
+                        model.heldOutResid = modelSelection.resid;
+                        
+                        % if permutation testing is requested, do it here
+                        % and store the results on the model to be written
+                        % to disk
+                        if doPermutationTesting
+                            [nullDist, pVals] = permutationTest(modelSelectionY,respAmpSelectionX,model.weights,addBias,[],permutationIters, model.heldOutCC); 
+                            model.heldOutPVals = pVals;
+                            model.heldOutNullDist = nullDist;
+                        end
+                    end
+                    
+                case {'Deconvolve'}
+                    
+                    % if the options says to load the hrf values from file,
+                    % then do so
+                    if opt.loadHRFFromFile
+                        hrfFile = fullfile(opt.hrfFolder,sprintf('%04d.mat',opt.chunkNum));
+                        hrf =loadSubField(hrfFile,'model','hrf');
+                        hrfBasisWeights =loadSubField(hrfFile,'model','hrfBasisWeights');
+                        hrfBasis =loadSubField(hrfFile,'model','hrfBasis');
+                    % otherwise estimate the hrfs now
+                    else
+                        
+                        % determine the hrf function to use in the
+                        % deconvolution
+                        hrfFit = estimateHRF(YZ, X, paradigm.TR);
+                        hrf = hrfFit.hrf;
+                        hrfBasisWeights = hrfFit.basisParams;
+                        hrfBasis = hrfFit.basis;
+                    end
+                    
+                    % deconvolve the hrf from the raw data creating
+                    % response amplitudes, the response of the voxels to
+                    % each stimuli
+                    [respAmp, respStimOrder] = deconvolveHRF(YZ, stimOrder, hrf);
+
+                    % hold out 10% of the data for use in model/voxel selection
+                    % For now, require model selection indices. If none are
+                    % provided that means no data is held out
+                    if ~isempty(modelSelectionIndices)
+                        respSelectionStim = arrayfun(@(x)find(respStimOrder==x,1),modelSelectionIndices);
+                        respEstimationStim = respStimOrder;
+                        respEstimationStim(respSelectionStim) = [];
+                        modelSelectionData = respAmp(respSelectionStim);
+                        modelEstimationData = respAmp;
+                        modelEstimationData(respSelectionStim) = [];
+                    else
+                        respSelectionStim = [];
+                        respEstimationStim = respStimOrder;
+                        modelSelectionData = [];
+                        modelEstimationData = respAmp;
+                    end
+                                                            
+                    % use only the features of the stimuli in the response
+                    % amplitudes to create the design matrix onto which
+                    % we'll regress the response amplitudes
+                    % ASSUME that the first repitition's set of features is
+                    % correct. Can't do per repitition features in this
+                    % model
+                    respAmpSelectionFeatures = features(respSelectionStim,:,1);
+                    respAmpEstimationFeatures = features(respEstimationStim,:,1);
+                    
+                    % estimate the features model on the response
+                    % amplitudes, and not the raw BOLD time series
+                    model=mrifEstimate(modelEstimationData,respAmpEstimationFeatures,0, estType, crossValFolds, nRuns, 'Runs', averageCrossValFolds, useSingleLambda, [], [], crossValSignificant);
+                    
+                    % if there is held out data, then predict it
+                    if ~isempty(modelSelectionData)
+                        % calculate the prediction accuracy
+                        modelSelection = mrifForward(modelSelectionData,respAmpSelectionFeatures,model.weights,addBias,[]);
+                        model.heldOutCC = modelSelection.cc;
+                        model.heldOutCI = modelSelection.cI;
+                        model.heldOutPred = modelSelection.pred;
+                        model.heldOutResid = modelSelection.resid;
+                        model.heldOutIndices = respSelectionStim;
+                        
+                        % if permutation testing is requested, do it here
+                        % and store the results on the model to be written
+                        % to disk
+                        if doPermutationTesting
+                            [nullDist, pVals] = permutationTest(modelSelectionData,respAmpSelectionFeatures,model.weights,addBias,[],permutationIters, model.heldOutCC); 
+                            model.heldOutPVals = pVals;
+                            model.heldOutNullDist = nullDist;
+                        end
+                    end
+                    
+                    % store the HRF info
+                    model.hrf = hrf;
+                    model.hrfBasisWeights = hrfBasisWeights;
+                    model.hrfBasis = hrfBasis;
+                    model.respAmp = respAmp;
+                    model.respStimOrder = respStimOrder;
+            end
+            
+            % now predict the held out chunk and store the accuracy
+            
             model.voxFit = chunkIdx;
             model.driftBasis = N;
             model.driftParams = driftParams;
@@ -356,12 +506,53 @@ switch lower(opt.mode)
                 end
                 
                 fprintf('Calculating validation responses.\n')
-                curModel = mrifForward(YZ,XZ,weights,addBias, excludeValFeatures);
+                switch(hrfType)
+                    case {'FIR'}
+                        
+                        % calculate the prediction accuracy
+%                        curModel = mrifForward(YZ,XZ,weights,addBias, excludeValFeatures);
+ 
+                        % store the variables to user in prediction
+                        predY = YZ;
+                        predX = XZ;
+                        predExcludeValFeatures = excludeValFeatures;
+                        
+                    case {'Deconvolve'}
+                        
+                        % load the hrf's estimated during the estimation
+                        % step, one for each voxel
+                        voxHRFs = loadSubField(estFile,'model','hrf');
+                        
+                        % deconvolve the hrf from the raw data creating
+                        % response amplitudes, the response of the voxels to
+                        % each stimuli
+                        [respAmp, respStimOrder] = deconvolveHRF(YZ, stimOrder, voxHRFs);
+                        
+                        % use only the features of the stimuli in the response
+                        % amplitudes to create the design matrix onto which
+                        % we'll regress the response amplitudes
+                        respAmpFeatures = features(respStimOrder,:,1);
+                        
+                        % store the variables to use in prediction
+                        predY = resAmp;
+                        predX = respAmpFeatures;
+                        predExcludeValFeatures = [];
+                        
+                        % calculate the prediction accuracy
+                        %curModel = mrifForward(respAmp,respAmpFeatures,weights,addBias,[]);
+                end
+                                
+                % calculate the prediction accuracy
+                model = mrifForward(predY,predX,weights,addBias,predExcludeValFeatures);
                 
-                model.cc = curModel.cc;
-                model.cI = curModel.cI;
-                model.pred = curModel.pred;
-                model.resid = curModel.resid;
+                % if permutation testing is requested, do it here
+                % and store the results on the model to be written
+                % to disk
+                if doPermutationTesting
+                    [nullDist, pVals] = permutationTest(predY,predX,weights,addBias,predExcludeValFeatures,permutationIters,model.cc);
+                    model.pVals = pVals;
+                    model.nullDist = nullDist;
+                end
             end
             
             % create the feature x FIR bin prediction matrix
@@ -515,7 +706,7 @@ switch lower(opt.mode)
                 
                 % This is estimating weights for stimuli as features, which
                 % should give an estimate of explainable variance
-                model=mrifEstimate(YZ,XStimZ,addBias, estType, repetitionCount, nRuns, crossValAssignments, false, useSingleLambda);
+                model=mrifEstimate(YZ,XStimZ,addBias, estType, repetitionCount, [], nRuns, crossValAssignments, 'None', false, useSingleLambda);
             
                 % write out the design matrices
                 if opt.writeDesignMatrix

@@ -1,4 +1,4 @@
-function stimIDMapFilename = wrapperCreateParadigms(options)
+function [stimIDMapFilename,modelSelectionIndices] = wrapperCreateParadigms(options)
 
 % the value in the frames vector that indicates no stimilus. make it 0 for
 % ease
@@ -126,6 +126,21 @@ for curSess = 1:options.sessCount
         
         % now update the previous stim count
         previousStimuli = previousStimuli + newStimCount;
+    end
+end
+
+% if there's a filename for the modelSelectionlist, convert read that file
+% in and convert the filenames into stim Indices 
+modelSelectionIndices = [];
+if ~isempty(options.modelSelectionListFilename)
+    
+    % read in the model Selection list
+    modelSelectionList = csvimport(options.modelSelectionListFilename, 'noheader', true);
+    
+    % iterate over the stim filenames an find the stim IDs for each
+    modelSelectionIndices = zeros(numel(modelSelectionList),1);
+    for curStim = 1:numel(modelSelectionList)
+        modelSelectionIndices(curStim) = stimIDMap(modelSelectionList{curStim});
     end
 end
 

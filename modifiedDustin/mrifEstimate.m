@@ -38,7 +38,7 @@ end
 % if the run count isn't divisible by the CV count then don't
 % partition the cross-validation folds by run
 if mod(runCount, crossvalFolds) ~= 0
-    crossvalType = 'Volumes';
+    error(sprintf('Trying to partition the cross-validation folds by runs, but the number of runs: %i, is not divisble by the crossvalFolds: %i provided',runCount, crossvalFolds));
 end
 
 % chunk the data up by runs
