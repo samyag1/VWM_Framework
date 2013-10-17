@@ -37,6 +37,10 @@ options.valReps = 0;
 options.estStim = 0;
 options.valStim = 0;
 
+% specify the filename that contains a list of stim image filenames to be
+% held out and used for model/voxel selection from the estimation data
+wrapperOptions.modelSelectionListFilename = '';
+
 options.doVoxelSelection = false;
 options.voxelSelectionMask = '';
 

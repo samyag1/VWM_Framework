@@ -260,10 +260,10 @@ for curKeyIdx = 1:stimIDMap.Count
             curStimEventIdx = usedRegressors(curStimRegressorIdx);
             
             % get the current filename to regressor value map
-            curRegressorMap = regressorMaps{curStimRegressorIdx};
+            curRegressorMap = regressorMaps{curStimEventIdx};
             
             if ~curRegressorMap.isKey(curStimFilename)
-                fprintf('The following stim file: %s is in the stimOrder files but not the regressor file: %s', curStimFilename, options.regressorFilenames{curStimRegressorIdx});
+                fprintf('The following stim file: %s is in the stimOrder files but not the regressor file: %s', curStimFilename, options.regressorFilenames{curStimEventIdx});
             end
             % get the current regressor's list of values for this stim
             curRegressorValueList = curRegressorMap(curStimFilename);

@@ -83,6 +83,12 @@ defOpt =  struct('onSlurm', 1, ...
                  'onlyUseStimVolsOffset',2, ...
                  'writeDesignMatrix',false, ... % whether to write out the design matrix to a file.
                  'useSingleLambda',true, ... % whether to select the ridge hyper parameter lambda per voxel, or select one for all the voexels
+                 'hrfType','Deconvolve', ... % Indicates the method used to account for the HRF. The options are 'FIR' and 'Deconvolve'. FIR Fits an FIR model with 'binsFIR' time bins. Deconvolve estimates weights on set of cononival basis functions (original, temporal derivative, dispersion).
+                 'loadHRFFromFile',false, ... % Used only in Deconvolution hrfType, indicates whether to load the hrfs from a set of estimation files, or estimate them new ***WARNING**** Estimating them new takes a LONG time
+                 'hrfFolder','', ... % the folder to find the hrf files in, if using the loadHRFFromFile option above
+                 'modelSelectionIndices',[], ... % Indices of either runs or stimuli to be held out for model/voxel selection. These runs/stim will be predicted using the model estimate, and this prediction accuracy can be used to select which voxels to use in deoding and which model is best
+                 'doPermutationTesting',false, ... % whether to do permutation testing on the modelSelection estimation data (if it exists), and the validation data. A Null distribution will be created, and used to test the significances of the prediction accuracy
+                 'permutationIters',2000, ... % the number of iterations to be done in permutation testing. Only applies if doPermutationTesting is true
                  'excludeValFeatures',[]); % NOT TO BE SET, DONE INTERNALL. This is for nuissance regressors that are stim based and so have FIR binning. This tells the framework to include in the estimation model, but not the validation prediction. 
 				  
 

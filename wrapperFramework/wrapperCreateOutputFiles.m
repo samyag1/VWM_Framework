@@ -11,7 +11,23 @@ end
 %   are next to each other, instead of the entire feature set being repeated
 
 % get the FIR bins that were used for this study. These are 0 based
-binsFIR= mrifOptions.binsFIR;
+% determine the FIR Bins variable based on the HRF estimation type
+switch(mrifOptions.hrfType)
+    % if a deconvolution model is being used then we want to create a design
+    % matrix with the features at the TR where the stimuli appeared, so set the
+    % FIR Bin variable to 0, which will do just that
+    case {'Deconvolve'}
+        binsFIR = 0;
+    
+    % Otherwise use the fir bins passed in by the user
+    case {'FIR'}
+        
+        % this is list of the bin offsets to use for the FIR model
+        binsFIR = mrifOptions.binsFIR;
+    otherwise
+        error(sprintf('Invalid hrfType parameter provided: %s. Choices are \"Deconvolve\" and \"FIR"', hrfType));
+end
+
 binCount = numel(binsFIR);
 featureCount = numel(featureNames);
 

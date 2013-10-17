@@ -30,6 +30,10 @@ for i = 1:numel(subjects)
     wrapperOptions.paradigmFolder = fullfile(modelFolder, subj, 'paradigms');
     wrapperOptions.featuresFolder = fullfile(modelFolder, subj, 'features');
     
+    % update the hrf Folder to be within the output folder and contain a
+    % subfolder for the current subject
+    mrifOptions.hrfFolder = fullfile(wrapperOptions.outputFolder, mrifOptions.hrfFolder, subj);
+    
     % if the model folder doesn't exist, create it
     if ~isdir(modelFolder)
         mkdir(modelFolder)
@@ -43,7 +47,7 @@ for i = 1:numel(subjects)
     
     % delete the input files created by this script so they will be remade
     if clearInput
-        clearInputFiles(wrapperOptions);
+        clearInputFiles(wrapperOptions, subj);
     end
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -52,7 +56,10 @@ for i = 1:numel(subjects)
     
     % create the paradigm files, if they're not already created. These contain
     % the order of the stimuli as presented
-    stimIDMapFilename = wrapperCreateParadigms(wrapperOptions);
+    [stimIDMapFilename, modelSelectionIndices] = wrapperCreateParadigms(wrapperOptions);
+    
+    % store the model selection in indices into the mrifOptions
+    mrifOptions.modelSelectionIndices = modelSelectionIndices;
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Create Experiment
