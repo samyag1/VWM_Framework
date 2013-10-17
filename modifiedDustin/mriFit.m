@@ -41,13 +41,13 @@ if notDefined('voxIdx')
 end
 
 if opt.onSlurm
-     slurmDir = fullfile(experiment.expDir,subj,'slurm');
+     queueDir = fullfile(experiment.expDir,subj,'queue');
 
-	if ~exist(slurmDir,'dir')
-		mkdir(slurmDir);
-		mkdir(fullfile(slurmDir,'scripts'));
-		mkdir(fullfile(slurmDir,'variables'));
-		mkdir(fullfile(slurmDir,'logs'));
+	if ~exist(queueDir,'dir')
+		mkdir(queueDir);
+		mkdir(fullfile(queueDir,'scripts'));
+		mkdir(fullfile(queueDir,'variables'));
+		mkdir(fullfile(queueDir,'logs'));
 	end
 end
 
@@ -125,10 +125,10 @@ for curModeIdx = 1:numel(opt.modes)
             if ~isempty(chunkIdx)
                 if opt.onSlurm
                     % GET SLURM ID; SAVE INPUTS; SEND TO SLURM
-                    slurmID = ['mrifRun_',opt.mode,'_Sess0',num2str(sess),'_',sprintf('%04d',chunk)];
-                    saveFile = fullfile(slurmDir,'variables',[slurmID,'.mat']);
+                    queueID = ['mrifRun_',opt.mode,'_Sess0',num2str(sess),'_',sprintf('%04d',chunk)];
+                    saveFile = fullfile(queueDir,'variables',[queueID,'.mat']);
                     save(saveFile,'xpmt','chunkIdx','opt','features','featuresNuissanceEst','featuresNuissanceVal');
-                    jobID = mrifRunParallel(slurmDir,slurmID,saveFile, chunk);
+                    jobID = mrifRunParallel(opt.queueType,queueDir,queueID,saveFile, chunk, opt.matlabCommand, opt.pathsToAdd);
                     jobIDs = [jobIDs jobID];
                 else
                     opt = mrifRun(xpmt,chunkIdx,features,featuresNuissanceEst,featuresNuissanceVal,opt);
@@ -143,7 +143,7 @@ for curModeIdx = 1:numel(opt.modes)
     % wait for the jobs to finish
     if opt.onSlurm && ~isempty(jobIDs)
         disp(jobIDs);
-        waitForQueue(jobIDs);
+        waitForQueue(opt.queueType,jobIDs);
     end
     
     % there are some tasks that require all the voxels to determine, such
@@ -179,10 +179,10 @@ end
 
 % SLURM-QUEUEING FUNCTIONS
 %------------------------------
-function [jobID, comStr] = mrifRunParallel(slurmDir,slurmID,saveFile, chunkNo)
+function [jobID, comStr] = mrifRunParallel(queueType,queueDir,queueID,saveFile, chunkNo, matlabCommand, pathsToAdd)
 
-script = [slurmID,'.script'];
-scriptFile = [slurmDir,'/scripts/',script];
+script = [queueID,'.script'];
+scriptFile = [queueDir,'/scripts/',script];
 
 %REMOVE THE SCRIPT IF IT ALREADY EXISTS...
 if exist(scriptFile)
@@ -195,21 +195,40 @@ end
 % 	otherwise
 % 		slurmPartition = 'all'
 % end
-MEMORY_NEEDED = '4500';
-logFilename = ['/logs/slurm_chunk-' num2str(chunkNo) '-%j.out '];
 
-%DEFINE COMMANDS
-batchStr =  ['sbatch --mem ',MEMORY_NEEDED,' -x krokodil ',' -o ',slurmDir,logFilename,scriptFile];
+% define the shell command that will launch the job based on the queue type
+switch(queueType)
+    case {'slurm'}
+        MEMORY_NEEDED = '4500';
+        logFilename = ['/logs/slurm_chunk-' num2str(chunkNo) '-%j.out'];
+        logPath = fullfile(queueDir, logFilename);
+        batchStr =  ['sbatch --mem ',MEMORY_NEEDED,' -x krokodil ',' -o ',logPath,' ',scriptFile];
+        jobOptions = '';
+    case {'SGE'}
+        MEMORY_NEEDED = '15G';
+%        batchStr =  ['qsub -j yes -i virtual_free=',MEMORY_NEEDED,' -o ',logPath,'-e ',logPath,scriptFile];
+        logPath = fullfile(queueDir, 'logs', ['slurm_chunk-' num2str(chunkNo) '-$JOB_ID.out']);
+        errorLogPath = fullfile(queueDir, 'logs', ['error_slurm_chunk-' num2str(chunkNo) '-$JOB_ID.out']);
+        batchStr =  ['qsub ' ,scriptFile];
+        jobOptions = ['#$ -o ',logPath,' -e ',logPath];
+    otherwise
+        error('Invalid queueType speicified while trying to parallelize. The value is: %s and the possible values are "slurm" or "SGE"',queueType);
+end
+
+% create the string that will add all the paths necessary to run this
+comstr2 = '';
+for curPath = 1:numel(pathsToAdd)
+    comstr2 = [comstr2, sprintf('addpath(genpath(''%s''));', pathsToAdd{curPath})];
+end
+
 comstr0 = '#!/bin/bash';
-%comstr1 = ['nice -n +4 /auto/k2/share/matlab/matlab80/bin/matlab -singleCompThread -r "'];
-comstr1 = ['/auto/k2/share/matlab/matlab80/bin/matlab -singleCompThread -r "'];
-comstr2 = ['addpath(genpath(''/auto/k2/spm8''));addpath(genpath(''/auto/k1/samyag1/code/mriTools''));addpath(genpath(''/auto/k1/samyag1/code/utils''));addpath(genpath(''/auto/k1/samyag1/code/wrapper''));addpath(genpath(''/auto/k1/samyag1/IAPS/analysis/scripts/''));'];
+comstr1 = [matlabCommand, ' -singleCompThread -r "'];
 comstr3 =['load ',sprintf('%s',saveFile),';'];
 comstr4 = 'opt = mrifRun(xpmt,chunkIdx,features,featuresNuissanceEst,featuresNuissanceVal,opt);exit"';
 
 % WRITE THE SCRIPT
 fid = fopen(scriptFile,'w');
-fprintf(fid,'%s\n%s%s%s%s',comstr0,comstr1,comstr2,comstr3,comstr4);
+fprintf(fid,'%s\n%s\n%s%s%s%s',comstr0,jobOptions,comstr1,comstr2,comstr3,comstr4);
 fclose(fid);	
 
 % MAKE SURE EVERYTING IS READY TO BE READ
@@ -217,11 +236,18 @@ pause(2);
 
 % RUN COMMAND AND GET JOB ID
 [status, message] = system(batchStr);
-message = regexp(message,' ','split');
-jobID = str2double(message{end});
+
+switch(queueType)
+    case {'slurm'}
+        message = regexp(message,' ','split');
+        jobID = str2double(message{end});
+    case {'SGE'}
+        words = strsplit(message, ' ');
+        jobID = str2double(words{3});
+end
 
 %------------------------------------------------------------------------
-function waitForQueue(jobIDs)
+function waitForQueue(queueType,jobIDs)
 fprintf('\n\n*---------------------------------------------------------*')
 fprintf('\n    Waiting for queued jobs to finish before proceeding ');
 fprintf('\n*---------------------------------------------------------*\n')
@@ -233,24 +259,36 @@ pause(1);
 while waiting
     tt = mod(round(toc),checkPeriod);
     if tt == 0
-        stat = checkQueue(jobIDs);
-        pause(checkPeriod*.9);  % WAIT BEFORE START CHECKING TIME AGAIN
+        stat = checkQueue(queueType,jobIDs);
         if stat
             waiting = 0;
+            break;
         end
+        pause(checkPeriod*.9);  % WAIT BEFORE START CHECKING TIME AGAIN
     end
 end
 
 %---------------------------------------------------------
-function status = checkQueue(jobIDs)
+function status = checkQueue(queueType,jobIDs)
 numJobs = length(jobIDs);
 status = 0;
 passCnt = 0;
 for job = 1:numJobs
-    checkStr = ['squeue --jobs ',num2str(jobIDs(job))];
-    [stat, msg]=system(checkStr);
-    if length(msg) < 90  % KINDA HACKY, BUT WORKS
-        passCnt = passCnt+1;
+    
+    switch(queueType)
+        case {'slurm'}
+            checkStr = ['squeue --jobs ',num2str(jobIDs(job))];
+            [stat, msg]=system(checkStr);
+            if length(msg) < 90  % KINDA HACKY, BUT WORKS
+                passCnt = passCnt+1;
+            end
+        case {'SGE'}
+            checkStr = ['qstat -j ',num2str(jobIDs(job))];
+            [stat, msg]=system(checkStr);
+            jobCompletedString =  'Following jobs do not exist';
+            if strncmp(msg, jobCompletedString, numel(jobCompletedString)) % KINDA HACKY, BUT WORKS
+                passCnt = passCnt+1;
+            end
     end
 end
 if passCnt == numJobs

@@ -184,8 +184,12 @@ for sess = 1:numSessions
         end
         if notDefined('voxDims')
             % PARSE INFORMATION FROM DICOMS
+%            dicoms = matchwildcards(fullfile(exp.dataDir, ...
+%                [exp.prefix{cond},num2str(exp.runIdx{cond}(1))],'/IM-*.dcm'));
+%                % this includes a run number if I ever use Dustin's
+%                preprocessing pipeline
             dicoms = matchwildcards(fullfile(exp.dataDir, ...
-                [exp.prefix{cond},num2str(exp.runIdx{cond}(1))],'/IM-*.dcm'));
+                [exp.prefix{cond}],'/IM-*.dcm'));
             exp.dicom{cond}=dicominfo(dicoms{1});
             
             % VOLUME DIMENSIONS
